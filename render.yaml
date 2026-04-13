@@ -69,7 +69,7 @@ services:
     plan: starter
     rootDir: studio
     buildCommand: npm ci && npm run build
-    startCommand: npm start
+    startCommand: node server.js
     healthCheckPath: /
     envVars:
       - key: NODE_ENV
