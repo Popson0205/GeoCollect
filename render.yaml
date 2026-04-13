@@ -1,34 +1,17 @@
-# GeoCollect Phase 1 — Render Deployment
-# ─────────────────────────────────────────────────────────────────────────────
-# Services deployed here:
-#   api       → Render Web Service   (Node.js / Fastify)
-#   geo-api   → Render Web Service   (Python / FastAPI)
-#   studio    → Render Web Service   (Next.js)
-#   field     → Render Static Site   (React PWA / Vite)
-#   postgres  → Render Managed PostgreSQL (with PostGIS)
-#   redis     → Render Managed Redis
-#
-# GeoServer + MinIO: Deploy separately on a VPS or Render Private Service.
-# ─────────────────────────────────────────────────────────────────────────────
-
 databases:
   - name: geocollect-postgres
     databaseName: geocollect
     user: geocollect
-    plan: starter                  # upgrade to standard for production
+    plan: starter
     postgresMajorVersion: "16"
 
 services:
 
-  # ─── Redis ─────────────────────────────────────────────────────────────────
   - type: redis
     name: geocollect-redis
     plan: starter
     maxmemoryPolicy: noeviction
 
-  # ─── Fastify API ───────────────────────────────────────────────────────────
-  # FIX: startCommand now uses npm scripts instead of bare `node src/...`
-  # paths, which caused Render to resolve src/src (double-src) at checkout.
   - type: web
     name: geocollect-api
     runtime: node
@@ -54,13 +37,12 @@ services:
       - key: PORT
         value: "3001"
       - key: MINIO_ENDPOINT
-        value: ""          # Set to your MinIO host
+        value: ""
       - key: MINIO_ACCESS_KEY
-        value: ""          # Set your MinIO access key
+        value: ""
       - key: MINIO_SECRET_KEY
-        value: ""          # Set your MinIO secret key
+        value: ""
 
-  # ─── Geo API (FastAPI / Python) ────────────────────────────────────────────
   - type: web
     name: geocollect-geo-api
     runtime: python
@@ -75,16 +57,12 @@ services:
           name: geocollect-postgres
           property: connectionString
       - key: GEOSERVER_URL
-        value: ""          # Set to your GeoServer URL
+        value: ""
       - key: GEOSERVER_USER
         value: admin
       - key: GEOSERVER_PASS
-        value: ""          # Set your GeoServer password
+        value: ""
 
-  # ─── Studio (Next.js) ──────────────────────────────────────────────────────
-  # FIX: startCommand uses `npm start` (next start) instead of
-  # `node .next/standalone/server.js`, which requires output:'standalone'
-  # in next.config.js. npm start works out of the box.
   - type: web
     name: geocollect-studio
     runtime: node
@@ -99,19 +77,10 @@ services:
       - key: PORT
         value: "3000"
       - key: NEXT_PUBLIC_API_URL
-        fromService:
-          type: web
-          name: geocollect-api
-          property: host
+        value: "https://geocollect-api.onrender.com"
       - key: NEXT_PUBLIC_GEO_API_URL
-        fromService:
-          type: web
-          name: geocollect-geo-api
-          property: host
+        value: "https://geocollect-geo-api.onrender.com"
 
-  # ─── Field App (React PWA / Vite → Static Site) ────────────────────────────
-  # FIX: Vite outputs to `dist/`, not `build/`. Deployed as a static site,
-  # not a web service — no Node runtime needed at runtime.
   - type: static
     name: geocollect-field
     rootDir: field
@@ -127,15 +96,9 @@ services:
     routes:
       - type: rewrite
         source: /*
-        destination: /index.html    # SPA fallback for React Router
+        destination: /index.html
     envVars:
       - key: VITE_API_URL
-        fromService:
-          type: web
-          name: geocollect-api
-          property: host
+        value: "https://geocollect-api.onrender.com"
       - key: VITE_GEO_API_URL
-        fromService:
-          type: web
-          name: geocollect-geo-api
-          property: host
+        value: "https://geocollect-geo-api.onrender.com"
