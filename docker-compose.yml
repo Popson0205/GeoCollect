@@ -1,0 +1,156 @@
+version: "3.9"
+
+services:
+  # ─── PostgreSQL + PostGIS ─────────────────────────────────────────────────
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: geocollect_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: geocollect
+      POSTGRES_USER: geocollect
+      POSTGRES_PASSWORD: geocollect
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U geocollect"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Redis ───────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: geocollect_redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ─── MinIO (S3-compatible object storage) ────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: geocollect_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: geocollect
+      MINIO_ROOT_PASSWORD: geocollect123
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ─── GeoServer ───────────────────────────────────────────────────────────
+  geoserver:
+    image: kartoza/geoserver:2.24.0
+    container_name: geocollect_geoserver
+    restart: unless-stopped
+    environment:
+      GEOSERVER_ADMIN_USER: admin
+      GEOSERVER_ADMIN_PASSWORD: geoserver
+      GEOSERVER_DATA_DIR: /opt/geoserver_data
+      INITIAL_MEMORY: 512m
+      MAXIMUM_MEMORY: 1024m
+    volumes:
+      - geoserver_data:/opt/geoserver_data
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ─── Fastify API ─────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: geocollect_api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://geocollect:geocollect@postgres:5432/geocollect
+      JWT_SECRET: ${JWT_SECRET:-geocollect-dev-secret-change-in-production}
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: "9000"
+      MINIO_ACCESS_KEY: geocollect
+      MINIO_SECRET_KEY: geocollect123
+      PORT: "3001"
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ─── FastAPI Geo API ─────────────────────────────────────────────────────
+  geo-api:
+    build:
+      context: ./geo-api
+      dockerfile: Dockerfile
+    container_name: geocollect_geo_api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://geocollect:geocollect@postgres:5432/geocollect
+      GEOSERVER_URL: http://geoserver:8080/geoserver
+      GEOSERVER_USER: admin
+      GEOSERVER_PASS: geoserver
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: geocollect
+      POSTGRES_USER: geocollect
+      POSTGRES_PASSWORD: geocollect
+    ports:
+      - "3002:3002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ─── Studio (Next.js) ────────────────────────────────────────────────────
+  studio:
+    build:
+      context: ./studio
+      dockerfile: Dockerfile
+    container_name: geocollect_studio
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
+      NEXT_PUBLIC_GEO_API_URL: ${NEXT_PUBLIC_GEO_API_URL:-http://localhost:3002}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+  # ─── Field (React PWA via nginx) ─────────────────────────────────────────
+  field:
+    build:
+      context: ./field
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:3001}
+    container_name: geocollect_field
+    restart: unless-stopped
+    ports:
+      - "3003:3003"
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  geoserver_data:
