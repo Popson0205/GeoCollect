@@ -1,3 +1,4 @@
+// api/src/db/migrate.js
 require('dotenv').config();
 const { Pool } = require('pg');
 
@@ -49,6 +50,11 @@ const migrations = `
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
   );
+
+  -- Geofence boundary: GeoJSON Polygon stored as JSONB.
+  -- Added in migration v2 — safe to run multiple times.
+  ALTER TABLE form_schemas
+    ADD COLUMN IF NOT EXISTS geofence JSONB DEFAULT NULL;
 
   CREATE TABLE IF NOT EXISTS features (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
