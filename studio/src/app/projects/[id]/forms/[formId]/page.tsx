@@ -8,6 +8,7 @@ import {
   useRef,
   type DragEvent,
 } from "react";
+import type { Map as MaplibreMap } from "maplibre-gl";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -34,6 +35,7 @@ import {
   Layers,
   AlertTriangle,
   CheckCircle2,
+  Search,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { FormSchema, FieldDef, GeometryType } from "@/types";
@@ -307,6 +309,77 @@ function FieldCard({
   );
 }
 
+// ─── Nominatim Address Search (shared by Geofence tab) ───────────────────────
+
+interface NominatimResult {
+  place_id: number;
+  display_name: string;
+  lat: string;
+  lon: string;
+}
+
+function AddressSearch({ onSelect }: { onSelect: (lng: number, lat: number) => void }) {
+  const [query, setQuery]     = useState("");
+  const [results, setResults] = useState<NominatimResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen]       = useState(false);
+  const debounceRef           = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const search = useCallback((q: string) => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!q.trim()) { setResults([]); setOpen(false); return; }
+    debounceRef.current = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&countrycodes=ng&limit=5`;
+        const res = await fetch(url, { headers: { "Accept-Language": "en" } });
+        const data: NominatimResult[] = await res.json();
+        setResults(data);
+        setOpen(data.length > 0);
+      } catch { setResults([]); }
+      finally { setLoading(false); }
+    }, 400);
+  }, []);
+
+  return (
+    <div style={{ position: "relative", zIndex: 20, width: "100%" }}>
+      <div className="flex items-center gap-2 bg-white rounded-xl border border-slate-200 shadow-md px-3 py-2">
+        <Search size={14} className="text-slate-400 shrink-0" />
+        <input
+          className="flex-1 text-sm outline-none bg-transparent text-slate-800 placeholder:text-slate-400 min-w-0"
+          placeholder="Search address or place in Nigeria…"
+          value={query}
+          onChange={e => { setQuery(e.target.value); search(e.target.value); }}
+          onFocus={() => results.length > 0 && setOpen(true)}
+        />
+        {loading && <span className="text-xs text-slate-400 shrink-0">Searching…</span>}
+        {query && !loading && (
+          <button className="text-slate-300 hover:text-slate-500" onClick={() => { setQuery(""); setResults([]); setOpen(false); }}>
+            <X size={13} />
+          </button>
+        )}
+      </div>
+      {open && results.length > 0 && (
+        <div className="absolute top-full mt-1 left-0 right-0 bg-white rounded-xl border border-slate-200 shadow-xl overflow-hidden">
+          {results.map(r => (
+            <button key={r.place_id}
+              className="w-full text-left px-4 py-2.5 text-sm hover:bg-slate-50 border-b border-slate-100 last:border-0"
+              onClick={() => {
+                onSelect(parseFloat(r.lon), parseFloat(r.lat));
+                setQuery(r.display_name.split(",")[0]);
+                setOpen(false);
+              }}
+            >
+              <p className="font-medium text-slate-800 truncate">{r.display_name.split(",")[0]}</p>
+              <p className="text-xs text-slate-400 truncate">{r.display_name.split(",").slice(1, 3).join(",")}</p>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Geofence Tab ─────────────────────────────────────────────────────────────
 
 function GeofenceTab({
@@ -322,6 +395,12 @@ function GeofenceTab({
   const [mapReady, setMapReady] = useState(false);
   const [drawing, setDrawing] = useState(false);
   const [error, setError] = useState("");
+
+  // Fly to address search result
+  const handleSearchSelect = useCallback((lng: number, lat: number) => {
+    if (!mapInst.current) return;
+    (mapInst.current as MaplibreMap).flyTo({ center: [lng, lat], zoom: 13, speed: 1.4 });
+  }, []);
 
   useEffect(() => {
     if (!mapRef.current || mapInst.current) return;
@@ -524,6 +603,10 @@ function GeofenceTab({
 
       {/* Map */}
       <div className="relative flex-1">
+            {/* Address search overlay */}
+            <div className="absolute top-3 left-3 z-10" style={{ width: "min(340px, calc(100% - 72px))" }}>
+              <AddressSearch onSelect={handleSearchSelect} />
+            </div>
         {error ? (
           <div className="flex items-center justify-center h-full">
             <div className="empty-state">
