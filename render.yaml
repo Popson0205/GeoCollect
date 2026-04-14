@@ -87,7 +87,7 @@ services:
     plan: starter
     rootDir: field
     buildCommand: npm ci && npm run build
-    startCommand: node server.js        # ← FIXED: was `npx serve -s dist -l $PORT`
+    startCommand: node server.js
     healthCheckPath: /
     envVars:
       - key: NODE_ENV
