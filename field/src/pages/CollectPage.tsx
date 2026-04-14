@@ -13,7 +13,7 @@ interface SelectOption { label: string; value: string; }
 
 interface FieldDef {
   id: string; key: string; label: string; type: string;
-  required?: boolean; hint?: string; options?: SelectOption[]; formula?: string;
+  required?: boolean; hint?: string; options?: SelectOption[];
 }
 
 interface GeofencePolygon {
@@ -32,7 +32,6 @@ interface NominatimResult {
   display_name: string;
   lat: string;
   lon: string;
-  boundingbox: [string, string, string, string];
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -59,7 +58,7 @@ const GOOGLE_HYBRID_STYLE: maplibregl.StyleSpecification = {
 const NIGERIA_CENTER: [number, number] = [8.6753, 9.082];
 const NIGERIA_ZOOM = 6;
 
-// ─── Point-in-polygon (ray casting) ─────────────────────────────────────────
+// ─── Point-in-polygon (ray casting) ──────────────────────────────────────────
 
 function pointInPolygon(point: [number, number], polygon: GeofencePolygon): boolean {
   const [px, py] = point;
@@ -68,104 +67,99 @@ function pointInPolygon(point: [number, number], polygon: GeofencePolygon): bool
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
     const [xi, yi] = ring[i];
     const [xj, yj] = ring[j];
-    const intersect = yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi;
+    const intersect =
+      yi > py !== yj > py &&
+      px < ((xj - xi) * (py - yi)) / (yj - yi) + xi;
     if (intersect) inside = !inside;
   }
   return inside;
 }
 
-// ─── Address Search Bar ───────────────────────────────────────────────────────
+// ─── Address Search ───────────────────────────────────────────────────────────
 
-function AddressSearch({
-  onSelect,
-}: {
-  onSelect: (lng: number, lat: number, label: string) => void;
+function AddressSearch({ onSelect }: {
+  onSelect: (lng: number, lat: number) => void;
 }) {
-  const [query, setQuery]       = useState("");
-  const [results, setResults]   = useState<NominatimResult[]>([]);
-  const [loading, setLoading]   = useState(false);
-  const [open, setOpen]         = useState(false);
-  const debounceRef             = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [query, setQuery]     = useState("");
+  const [results, setResults] = useState<NominatimResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen]       = useState(false);
+  const debounce              = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const search = useCallback((q: string) => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (debounce.current) clearTimeout(debounce.current);
     if (!q.trim()) { setResults([]); setOpen(false); return; }
-    debounceRef.current = setTimeout(async () => {
+    debounce.current = setTimeout(async () => {
       setLoading(true);
       try {
-        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&countrycodes=ng&limit=5&addressdetails=1`;
-        const res = await fetch(url, { headers: { "Accept-Language": "en" } });
-        const data: NominatimResult[] = await res.json();
+        const url =
+          `https://nominatim.openstreetmap.org/search?format=json` +
+          `&q=${encodeURIComponent(q)}&countrycodes=ng&limit=5`;
+        const res  = await fetch(url, { headers: { "Accept-Language": "en" } });
+        const data = (await res.json()) as NominatimResult[];
         setResults(data);
         setOpen(data.length > 0);
-      } catch {
-        setResults([]);
-      } finally {
-        setLoading(false);
-      }
+      } catch { setResults([]); }
+      finally   { setLoading(false); }
     }, 400);
   }, []);
 
   return (
     <div style={{ position: "relative", zIndex: 20 }}>
+      {/* Input */}
       <div style={{
         display: "flex", alignItems: "center", gap: 8,
         background: "#fff", borderRadius: 10,
         border: "1px solid #e2e8f0",
-        boxShadow: "0 2px 8px rgba(0,0,0,0.12)",
+        boxShadow: "0 2px 12px rgba(0,0,0,0.14)",
         padding: "8px 12px",
       }}>
         <span style={{ fontSize: 14, color: "#94a3b8", flexShrink: 0 }}>🔍</span>
         <input
           style={{
             flex: 1, border: "none", outline: "none",
-            fontSize: 13, color: "#0f172a", background: "transparent",
-            minWidth: 0,
+            fontSize: 13, color: "#0f172a", background: "transparent", minWidth: 0,
           }}
-          placeholder="Search address or place in Nigeria…"
+          placeholder="Search address or place…"
           value={query}
-          onChange={(e) => { setQuery(e.target.value); search(e.target.value); }}
+          onChange={e => { setQuery(e.target.value); search(e.target.value); }}
           onFocus={() => results.length > 0 && setOpen(true)}
         />
-        {loading && (
-          <span style={{ fontSize: 11, color: "#94a3b8", flexShrink: 0 }}>Searching…</span>
-        )}
+        {loading && <span style={{ fontSize: 11, color: "#94a3b8", flexShrink: 0 }}>…</span>}
         {query && !loading && (
           <button
-            style={{ background: "none", border: "none", cursor: "pointer", color: "#94a3b8", padding: 0, flexShrink: 0 }}
+            style={{ background: "none", border: "none", cursor: "pointer", color: "#94a3b8", padding: 0 }}
             onClick={() => { setQuery(""); setResults([]); setOpen(false); }}
           >✕</button>
         )}
       </div>
 
+      {/* Dropdown */}
       {open && results.length > 0 && (
         <div style={{
           position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0,
           background: "#fff", borderRadius: 10,
           border: "1px solid #e2e8f0",
-          boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
+          boxShadow: "0 8px 24px rgba(0,0,0,0.14)",
           overflow: "hidden",
         }}>
-          {results.map((r) => (
-            <button
-              key={r.place_id}
+          {results.map(r => (
+            <button key={r.place_id}
               style={{
                 display: "block", width: "100%", textAlign: "left",
                 padding: "10px 14px", border: "none", background: "none",
                 cursor: "pointer", fontSize: 12, color: "#0f172a",
                 borderBottom: "1px solid #f1f5f9",
-                lineHeight: 1.4,
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "#f8fafc")}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+              onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
+              onMouseLeave={e => (e.currentTarget.style.background = "none")}
               onClick={() => {
-                onSelect(parseFloat(r.lon), parseFloat(r.lat), r.display_name);
+                onSelect(parseFloat(r.lon), parseFloat(r.lat));
                 setQuery(r.display_name.split(",")[0]);
                 setOpen(false);
               }}
             >
-              <span style={{ fontWeight: 600 }}>{r.display_name.split(",")[0]}</span>
-              <br />
+              <strong>{r.display_name.split(",")[0]}</strong><br />
               <span style={{ color: "#94a3b8", fontSize: 11 }}>
                 {r.display_name.split(",").slice(1, 3).join(",")}
               </span>
@@ -185,39 +179,34 @@ function FieldInput({ field, value, onChange }: {
   const base: React.CSSProperties = {
     width: "100%", padding: "10px 12px", borderRadius: 10,
     border: "1px solid #e2e8f0", fontSize: 14, background: "#fff",
-    outline: "none", transition: "border-color 0.15s, box-shadow 0.15s",
-  };
-  const onFocus = (e: React.FocusEvent<HTMLElement>) => {
-    (e.target as HTMLElement).style.borderColor = "#2563eb";
-    (e.target as HTMLElement).style.boxShadow = "0 0 0 3px rgba(37,99,235,0.15)";
-  };
-  const onBlur = (e: React.FocusEvent<HTMLElement>) => {
-    (e.target as HTMLElement).style.borderColor = "#e2e8f0";
-    (e.target as HTMLElement).style.boxShadow = "none";
+    outline: "none",
   };
 
   switch (field.type) {
     case "text":
-      return <input style={base} type="text" placeholder={field.hint || ""} value={(value as string) || ""} onChange={e => onChange(e.target.value)} onFocus={onFocus} onBlur={onBlur} />;
+      return <input style={base} type="text" placeholder={field.hint || ""}
+        value={(value as string) || ""} onChange={e => onChange(e.target.value)} />;
     case "number":
-      return <input style={base} type="number" placeholder={field.hint || ""} value={(value as string) || ""} onChange={e => onChange(parseFloat(e.target.value))} onFocus={onFocus} onBlur={onBlur} />;
+      return <input style={base} type="number" placeholder={field.hint || ""}
+        value={(value as string) || ""} onChange={e => onChange(parseFloat(e.target.value))} />;
     case "date":
-      return <input style={base} type="date" value={(value as string) || ""} onChange={e => onChange(e.target.value)} onFocus={onFocus} onBlur={onBlur} />;
+      return <input style={base} type="date" value={(value as string) || ""}
+        onChange={e => onChange(e.target.value)} />;
     case "datetime":
-      return <input style={base} type="datetime-local" value={(value as string) || ""} onChange={e => onChange(e.target.value)} onFocus={onFocus} onBlur={onBlur} />;
+      return <input style={base} type="datetime-local" value={(value as string) || ""}
+        onChange={e => onChange(e.target.value)} />;
 
     case "boolean":
       return (
         <div style={{ display: "flex", gap: 12 }}>
           {["Yes", "No"].map(opt => (
             <label key={opt} style={{
-              display: "flex", alignItems: "center", justifyContent: "center",
-              gap: 8, padding: "8px 16px", borderRadius: 8, flex: 1,
+              flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
+              padding: "8px", borderRadius: 8, cursor: "pointer", fontSize: 14,
               border: `2px solid ${value === opt ? "#2563eb" : "#e2e8f0"}`,
               background: value === opt ? "#eff6ff" : "#fff",
               color: value === opt ? "#2563eb" : "#64748b",
-              fontWeight: value === opt ? 600 : 400, cursor: "pointer",
-              transition: "all 0.15s", fontSize: 14,
+              fontWeight: value === opt ? 600 : 400,
             }}>
               <input type="radio" name={field.key} value={opt} checked={value === opt}
                 onChange={() => onChange(opt)} style={{ display: "none" }} />
@@ -234,8 +223,7 @@ function FieldInput({ field, value, onChange }: {
           backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E\")",
           backgroundRepeat: "no-repeat", backgroundPosition: "right 12px center", paddingRight: 36,
         }}
-          value={(value as string) || ""} onChange={e => onChange(e.target.value)}
-          onFocus={onFocus} onBlur={onBlur}>
+          value={(value as string) || ""} onChange={e => onChange(e.target.value)}>
           <option value="">Select an option…</option>
           {(field.options || []).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
@@ -254,14 +242,13 @@ function FieldInput({ field, value, onChange }: {
                 border: `2px solid ${checked ? "#2563eb" : "#e2e8f0"}`,
                 background: checked ? "#eff6ff" : "#fff",
                 color: checked ? "#2563eb" : "#1e293b",
-                fontWeight: checked ? 600 : 400, fontSize: 14, transition: "all 0.15s",
+                fontWeight: checked ? 600 : 400, fontSize: 14,
               }}>
                 <span style={{
                   width: 18, height: 18, borderRadius: 4, flexShrink: 0,
                   border: `2px solid ${checked ? "#2563eb" : "#cbd5e1"}`,
                   background: checked ? "#2563eb" : "#fff",
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  transition: "all 0.15s",
                 }}>
                   {checked && <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
                     <path d="M2 5l2.5 2.5L8 3" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -270,7 +257,9 @@ function FieldInput({ field, value, onChange }: {
                 {o.label}
                 <input type="checkbox" checked={checked} style={{ display: "none" }}
                   onChange={e => {
-                    const next = e.target.checked ? [...selected, o.value] : selected.filter(v => v !== o.value);
+                    const next = e.target.checked
+                      ? [...selected, o.value]
+                      : selected.filter(v => v !== o.value);
                     onChange(next);
                   }} />
               </label>
@@ -285,7 +274,11 @@ function FieldInput({ field, value, onChange }: {
         <div style={{ display: "flex", gap: 6 }}>
           {[1, 2, 3, 4, 5].map(n => (
             <button key={n} type="button" onClick={() => onChange(n)}
-              style={{ fontSize: 28, background: "none", border: "none", cursor: "pointer", padding: "0 2px", transition: "color 0.1s", color: (value as number) >= n ? "#f59e0b" : "#e2e8f0" }}>★</button>
+              style={{
+                fontSize: 28, background: "none", border: "none",
+                cursor: "pointer", padding: "0 2px",
+                color: (value as number) >= n ? "#f59e0b" : "#e2e8f0",
+              }}>★</button>
           ))}
         </div>
       );
@@ -308,7 +301,8 @@ function FieldInput({ field, value, onChange }: {
                 reader.readAsDataURL(file);
               }} />
           </label>
-          {value && <img src={value as string} alt="captured" style={{ width: "100%", borderRadius: 10, marginTop: 8, maxHeight: 240, objectFit: "cover" }} />}
+          {value && <img src={value as string} alt="captured"
+            style={{ width: "100%", borderRadius: 10, marginTop: 8, maxHeight: 240, objectFit: "cover" }} />}
         </div>
       );
 
@@ -332,7 +326,8 @@ function FieldInput({ field, value, onChange }: {
       );
 
     default:
-      return <input style={base} type="text" value={(value as string) || ""} onChange={e => onChange(e.target.value)} onFocus={onFocus} onBlur={onBlur} />;
+      return <input style={base} type="text" value={(value as string) || ""}
+        onChange={e => onChange(e.target.value)} />;
   }
 }
 
@@ -346,16 +341,16 @@ export default function CollectPage() {
   const mapInstance = useRef<maplibregl.Map | null>(null);
   const markerRef   = useRef<maplibregl.Marker | null>(null);
 
-  const [form, setForm]         = useState<FormSchema | null>(null);
-  const [geometry, setGeometry] = useState<GeoJSON.Geometry | null>(null);
-  const [attrs, setAttrs]       = useState<Record<string, unknown>>({});
-  const [step, setStep]         = useState<"map" | "form">("map");
-  const [submitting, setSubmitting] = useState(false);
-  const [done, setDone]         = useState(false);
-  // "outside" = hard block; "inside" or null = ok
-  const [geofenceStatus, setGeofenceStatus] = useState<"inside" | "outside" | null>(null);
+  const [form, setForm]               = useState<FormSchema | null>(null);
+  const [geometry, setGeometry]       = useState<GeoJSON.Geometry | null>(null);
+  const [attrs, setAttrs]             = useState<Record<string, unknown>>({});
+  const [step, setStep]               = useState<"map" | "form">("map");
+  const [submitting, setSubmitting]   = useState(false);
+  const [done, setDone]               = useState(false);
+  // null = no point placed yet; true = inside; false = outside
+  const [insideGeofence, setInsideGeofence] = useState<boolean | null>(null);
 
-  // Load form from IndexedDB
+  // ── Step 1: Load form from IndexedDB ────────────────────────────────────────
   useEffect(() => {
     (async () => {
       const db = await getDB();
@@ -364,29 +359,10 @@ export default function CollectPage() {
     })();
   }, [formId]);
 
-  // Place / move marker helper — also runs geofence check
-  const placeMarker = useCallback((lng: number, lat: number) => {
-    const map = mapInstance.current;
-    if (!map) return;
-    if (markerRef.current) markerRef.current.remove();
-    const marker = new maplibregl.Marker({ color: "#2563eb" })
-      .setLngLat([lng, lat])
-      .addTo(map);
-    markerRef.current = marker;
-    setGeometry({ type: "Point", coordinates: [lng, lat] });
-
-    // Geofence check
-    if (form?.geofence) {
-      const inside = pointInPolygon([lng, lat], form.geofence);
-      setGeofenceStatus(inside ? "inside" : "outside");
-    } else {
-      setGeofenceStatus("inside");
-    }
-  }, [form]);
-
-  // Init map
+  // ── Step 2: Init map ONLY after form is loaded ───────────────────────────────
+  // This ensures form.geofence is available when the map draws.
   useEffect(() => {
-    if (step !== "map" || !mapRef.current) return;
+    if (step !== "map" || !mapRef.current || !form) return;
 
     const map = new maplibregl.Map({
       container: mapRef.current,
@@ -407,25 +383,38 @@ export default function CollectPage() {
     );
 
     map.on("load", () => {
-      // Draw geofence boundary if present
-      if (form?.geofence) {
+      // Draw geofence if this form has one
+      if (form.geofence) {
         map.addSource("geofence", {
           type: "geojson",
-          data: { type: "Feature", geometry: form.geofence, properties: {} },
+          data: {
+            type: "Feature",
+            geometry: form.geofence,
+            properties: {},
+          },
         });
+
+        // Filled area
         map.addLayer({
           id: "geofence-fill",
           type: "fill",
           source: "geofence",
-          paint: { "fill-color": "#2563eb", "fill-opacity": 0.08 },
+          paint: { "fill-color": "#2563eb", "fill-opacity": 0.1 },
         });
+
+        // Dashed border
         map.addLayer({
           id: "geofence-line",
           type: "line",
           source: "geofence",
-          paint: { "line-color": "#2563eb", "line-width": 2.5, "line-dasharray": [4, 2] },
+          paint: {
+            "line-color": "#2563eb",
+            "line-width": 2.5,
+            "line-dasharray": [4, 2],
+          },
         });
-        // Fit to geofence
+
+        // Auto-fit to geofence bounds
         const coords = form.geofence.coordinates[0];
         const lngs = coords.map(c => c[0]);
         const lats = coords.map(c => c[1]);
@@ -436,24 +425,48 @@ export default function CollectPage() {
       }
     });
 
-    map.on("click", (e) => placeMarker(e.lngLat.lng, e.lngLat.lat));
+    // Place marker on tap + run geofence check
+    map.on("click", e => {
+      placeMarkerAt(map, e.lngLat.lng, e.lngLat.lat, form);
+    });
 
     return () => { map.remove(); mapInstance.current = null; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, form]);
+    // Re-run if step or form changes (e.g. user goes Back and returns)
+  }, [step, form]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Address search fly-to + optional marker drop
+  // ── Place / move marker + check geofence ────────────────────────────────────
+  const placeMarkerAt = useCallback(
+    (map: maplibregl.Map, lng: number, lat: number, currentForm: FormSchema | null) => {
+      if (markerRef.current) markerRef.current.remove();
+      const marker = new maplibregl.Marker({ color: "#2563eb" })
+        .setLngLat([lng, lat])
+        .addTo(map);
+      markerRef.current = marker;
+      setGeometry({ type: "Point", coordinates: [lng, lat] });
+
+      if (currentForm?.geofence) {
+        const inside = pointInPolygon([lng, lat], currentForm.geofence);
+        setInsideGeofence(inside);
+      } else {
+        // No geofence set → always allowed
+        setInsideGeofence(true);
+      }
+    },
+    []
+  );
+
+  // ── Address search: fly + drop marker ───────────────────────────────────────
   const handleSearchSelect = useCallback((lng: number, lat: number) => {
     const map = mapInstance.current;
     if (!map) return;
     map.flyTo({ center: [lng, lat], zoom: 14, speed: 1.4 });
-    // Drop marker at the searched location
-    placeMarker(lng, lat);
-  }, [placeMarker]);
+    // Small delay so the map has moved before we drop the marker
+    setTimeout(() => placeMarkerAt(map, lng, lat, form), 600);
+  }, [form, placeMarkerAt]);
 
-  // Submit
+  // ── Submit ───────────────────────────────────────────────────────────────────
   const submit = async () => {
-    if (!geometry) return;
+    if (!geometry || insideGeofence === false) return;
     setSubmitting(true);
     const feature = {
       id: uuid(),
@@ -474,18 +487,34 @@ export default function CollectPage() {
   // ── Done screen ──────────────────────────────────────────────────────────────
   if (done) {
     return (
-      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 16, padding: 24, background: "#f8fafc" }}>
-        <div style={{ width: 72, height: 72, borderRadius: "50%", background: "#dcfce7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 36 }}>✅</div>
+      <div style={{
+        minHeight: "100vh", display: "flex", alignItems: "center",
+        justifyContent: "center", flexDirection: "column",
+        gap: 16, padding: 24, background: "#f8fafc",
+      }}>
+        <div style={{
+          width: 72, height: 72, borderRadius: "50%",
+          background: "#dcfce7", display: "flex",
+          alignItems: "center", justifyContent: "center", fontSize: 36,
+        }}>✅</div>
         <h2 style={{ fontSize: 22, fontWeight: 700, color: "#0f172a" }}>Submitted!</h2>
         <p style={{ color: "#64748b", textAlign: "center", fontSize: 14 }}>
-          {navigator.onLine ? "Synced to server successfully." : "Saved offline — will sync when connected."}
+          {navigator.onLine
+            ? "Synced to server successfully."
+            : "Saved offline — will sync when connected."}
         </p>
         <div style={{ display: "flex", flexDirection: "column", gap: 10, width: "100%", maxWidth: 320 }}>
-          <button className="btn btn-primary" style={{ justifyContent: "center", padding: "12px 16px" }}
-            onClick={() => { setDone(false); setGeometry(null); setAttrs({}); setStep("map"); setGeofenceStatus(null); }}>
+          <button className="btn btn-primary"
+            style={{ justifyContent: "center", padding: "12px 16px" }}
+            onClick={() => {
+              setDone(false); setGeometry(null); setAttrs({});
+              setStep("map"); setInsideGeofence(null);
+            }}>
             Collect Another
           </button>
-          <button className="btn btn-ghost" style={{ justifyContent: "center" }} onClick={() => nav("/projects")}>
+          <button className="btn btn-ghost"
+            style={{ justifyContent: "center" }}
+            onClick={() => nav("/projects")}>
             Back to Projects
           </button>
         </div>
@@ -493,11 +522,11 @@ export default function CollectPage() {
     );
   }
 
-  const fields = form?.schema?.fields || [];
-  const hasGeofence = !!form?.geofence;
-  const isOutside = geofenceStatus === "outside";
-  // Hard block: can't proceed to form if outside geofence
-  const canProceed = !!geometry && !isOutside;
+  const fields       = form?.schema?.fields || [];
+  const hasGeofence  = !!form?.geofence;
+  // Hard block: outside = false (not null, not true)
+  const isBlocked    = insideGeofence === false;
+  const canProceed   = !!geometry && !isBlocked;
 
   const requiredMissing = fields
     .filter(f => f.required)
@@ -507,7 +536,7 @@ export default function CollectPage() {
       return v === undefined || v === null || v === "";
     });
 
-  // ── Main layout ──────────────────────────────────────────────────────────────
+  // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div style={{ height: "100dvh", display: "flex", flexDirection: "column", background: "#f8fafc" }}>
 
@@ -526,47 +555,49 @@ export default function CollectPage() {
           <p style={{ fontSize: 11, color: "#64748b", marginTop: 1 }}>
             {step === "map"
               ? hasGeofence
-                ? "Tap within the blue boundary to place your location"
+                ? "Tap inside the blue boundary to place your location"
                 : "Tap the map to place your location"
               : `Fill in ${fields.length} field${fields.length !== 1 ? "s" : ""}`}
           </p>
         </div>
-        {/* Step indicator */}
+        {/* Step dots */}
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           {["map", "form"].map(s => (
             <span key={s} style={{
               width: step === s ? 20 : 8, height: 8, borderRadius: 99,
-              background: step === s ? "#2563eb" : "#e2e8f0", transition: "all 0.2s",
+              background: step === s ? "#2563eb" : "#e2e8f0",
+              transition: "all 0.2s",
             }} />
           ))}
         </div>
       </div>
 
-      {/* Map step */}
+      {/* ── Map step ──────────────────────────────────────────────────────────── */}
       {step === "map" && (
         <>
-          {/* Map container */}
           <div style={{ position: "relative", flex: 1 }}>
+            {/* Map canvas */}
             <div ref={mapRef} style={{ position: "absolute", inset: 0 }} />
 
-            {/* Address search — overlaid top-left */}
+            {/* Address search — top-left overlay */}
             <div style={{
-              position: "absolute", top: 12, left: 12, right: 56,
+              position: "absolute", top: 12, left: 12,
+              width: "min(320px, calc(100% - 64px))",
               zIndex: 10,
             }}>
               <AddressSearch onSelect={handleSearchSelect} />
             </div>
 
-            {/* Geofence hard-block banner */}
-            {isOutside && (
+            {/* Geofence HARD BLOCK banner */}
+            {isBlocked && (
               <div style={{
-                position: "absolute", bottom: 80, left: "50%",
-                transform: "translateX(-50%)",
+                position: "absolute",
+                bottom: 16, left: "50%", transform: "translateX(-50%)",
                 background: "#fef2f2", color: "#dc2626",
-                border: "1.5px solid #fecaca",
-                padding: "10px 18px", borderRadius: 12,
-                fontSize: 13, fontWeight: 600,
-                boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
+                border: "2px solid #fecaca",
+                padding: "10px 20px", borderRadius: 12,
+                fontSize: 13, fontWeight: 700,
+                boxShadow: "0 4px 16px rgba(220,38,38,0.2)",
                 display: "flex", alignItems: "center", gap: 8,
                 zIndex: 10, whiteSpace: "nowrap",
               }}>
@@ -575,7 +606,7 @@ export default function CollectPage() {
             )}
           </div>
 
-          {/* Bottom action bar */}
+          {/* Bottom bar */}
           <div style={{
             background: "#fff", borderTop: "1px solid #e2e8f0",
             padding: "14px 16px", flexShrink: 0,
@@ -585,25 +616,27 @@ export default function CollectPage() {
                 <div>
                   <p style={{
                     fontSize: 12, fontWeight: 600,
-                    color: isOutside ? "#dc2626" : "#16a34a",
+                    color: isBlocked ? "#dc2626" : "#16a34a",
                   }}>
-                    {isOutside ? "🚫" : "📍"}{" "}
+                    {isBlocked ? "🚫" : "📍"}{" "}
                     {(geometry as GeoJSON.Point).coordinates[1].toFixed(5)},{" "}
                     {(geometry as GeoJSON.Point).coordinates[0].toFixed(5)}
                   </p>
-                  {isOutside ? (
-                    <p style={{ fontSize: 11, color: "#dc2626", marginTop: 2 }}>
-                      Location outside geofence — reposition to continue
-                    </p>
-                  ) : (
-                    <p style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
-                      Tap to reposition
-                    </p>
-                  )}
+                  <p style={{ fontSize: 11, color: isBlocked ? "#dc2626" : "#94a3b8", marginTop: 2 }}>
+                    {isBlocked
+                      ? "Move your pin inside the boundary to continue"
+                      : "Tap to reposition"}
+                  </p>
                 </div>
+                {/* HARD BLOCK: button disabled + visually locked when outside */}
                 <button
                   className="btn btn-primary"
-                  style={{ flexShrink: 0, opacity: canProceed ? 1 : 0.4 }}
+                  style={{
+                    flexShrink: 0,
+                    opacity: canProceed ? 1 : 0.35,
+                    cursor: canProceed ? "pointer" : "not-allowed",
+                    pointerEvents: canProceed ? "auto" : "none",
+                  }}
                   disabled={!canProceed}
                   onClick={() => setStep("form")}
                 >
@@ -613,15 +646,15 @@ export default function CollectPage() {
             ) : (
               <p style={{ fontSize: 13, color: "#94a3b8", textAlign: "center", padding: "4px 0" }}>
                 {hasGeofence
-                  ? "Search an address above or tap inside the blue boundary"
-                  : "Search an address above or tap the map to place a point"}
+                  ? "Search an address or tap inside the blue boundary"
+                  : "Search an address or tap the map to place a point"}
               </p>
             )}
           </div>
         </>
       )}
 
-      {/* Form step */}
+      {/* ── Form step ─────────────────────────────────────────────────────────── */}
       {step === "form" && (
         <div style={{
           flex: 1, overflowY: "auto",
@@ -654,6 +687,7 @@ export default function CollectPage() {
               justifyContent: "center", padding: "14px 16px",
               marginTop: 8, fontSize: 15, fontWeight: 700, borderRadius: 12,
               opacity: (submitting || requiredMissing) ? 0.5 : 1,
+              cursor: (submitting || requiredMissing) ? "not-allowed" : "pointer",
             }}
             onClick={submit}
             disabled={submitting || requiredMissing}
