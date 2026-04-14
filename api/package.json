@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "migrate": "node src/db/migrate.js",
+    "migrate": "node src/db/migrate.js && node src/db/migrate-v5-multigeofence.js",
     "sync-worker": "node src/workers/syncWorker.js"
   },
   "dependencies": {
