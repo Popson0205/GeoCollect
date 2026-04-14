@@ -333,17 +333,17 @@ function GeofenceTab({
         style: {
           version: 8,
           sources: {
-            "osm-tiles": {
+            "google-hybrid": {
               type: "raster",
-              tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+              tiles: ["https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"],
               tileSize: 256,
-              attribution: "© OpenStreetMap contributors",
+              attribution: "© Google",
             },
           },
-          layers: [{ id: "osm", type: "raster", source: "osm-tiles" }],
+          layers: [{ id: "google-hybrid", type: "raster", source: "google-hybrid" }],
         },
-        center: [0, 20],
-        zoom: 2,
+        center: [8.6753, 9.0820], // Nigeria centroid
+        zoom: 6,
       });
 
       map.on("load", () => {
@@ -379,7 +379,7 @@ function GeofenceTab({
           },
         });
 
-        // Fit to existing geofence
+        // Fit to existing geofence, otherwise stay on Nigeria
         if (geofence) {
           const coords = geofence.coordinates[0];
           const lngs = coords.map((c) => c[0]);
