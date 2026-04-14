@@ -182,7 +182,8 @@
   /* ─── Option row (select editor) ─────────────────────── */
   .option-row {
     @apply flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50
-           border border-slate-200 hover:border-slate-300 group;
+           border border-slate-200 hover:border-slate-300;
+    /* Note: add `group` class directly in JSX, not via @apply */
   }
 
   /* ─── Stat card ──────────────────────────────────────── */
