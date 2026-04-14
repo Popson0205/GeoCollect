@@ -102,7 +102,7 @@ function OptionsEditor({
       <label className="label">Options</label>
       <div className="space-y-1.5">
         {options.map((opt, i) => (
-          <div key={i} className="option-row">
+          <div key={i} className="option-row group">
             <span className="text-slate-300 shrink-0">
               <GripVertical size={14} />
             </span>
