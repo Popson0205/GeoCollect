@@ -83,6 +83,28 @@ const migrations = `
     new_value JSONB,
     changed_at TIMESTAMPTZ DEFAULT NOW()
   );
+
+  -- Phase 2: Media attachments (photo, audio, video, file)
+  CREATE TABLE IF NOT EXISTS attachments (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    feature_id    UUID REFERENCES features(id) ON DELETE CASCADE,
+    field_key     TEXT NOT NULL,
+    bucket        TEXT NOT NULL DEFAULT 'geocollect-media',
+    object_key    TEXT NOT NULL,
+    original_name TEXT,
+    mime_type     TEXT NOT NULL,
+    size_bytes    BIGINT,
+    uploaded_by   UUID REFERENCES users(id) ON DELETE SET NULL,
+    uploaded_at   TIMESTAMPTZ DEFAULT NOW()
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_attachments_feature_id ON attachments(feature_id);
+  CREATE INDEX IF NOT EXISTS idx_attachments_field_key  ON attachments(field_key);
+
+  -- Phase 2: CRDT vector clock for conflict-free offline sync
+  ALTER TABLE features ADD COLUMN IF NOT EXISTS vector_clock JSONB DEFAULT '{}';
+
+  CREATE INDEX IF NOT EXISTS idx_features_sync_status ON features(sync_status);
 `;
 
 async function migrate() {
