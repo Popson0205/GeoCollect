@@ -6,6 +6,10 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { getDB, saveFeatureOffline } from "../lib/db";
 import { syncPendingFeatures } from "../lib/sync";
 import { v4 as uuid } from "uuid";
+// ── GPS GEOFENCE ADD ──────────────────────────────────────────────────────────
+import { useGeofence } from "../lib/useGeofence";
+import GeofenceStatusBar from "../components/GeofenceStatusBar";
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -350,6 +354,23 @@ export default function CollectPage() {
   // null = no point placed yet; true = inside; false = outside
   const [insideGeofence, setInsideGeofence] = useState<boolean | null>(null);
 
+  // ── GPS GEOFENCE ADD ──────────────────────────────────────────────────────
+  // Wire the GPS-driven geofencing engine.
+  // useGeofence starts watchPosition immediately and feeds every GPS tick into
+  // geofenceEngine.update() → fires entry / exit / dwell callbacks.
+  // We surface the state to GeofenceStatusBar and also use it to update the
+  // live GPS geofence status (separate from the tap-to-place check below).
+  const geofenceState = useGeofence({
+    onTrigger: (event) => {
+      // Keep insideGeofence in sync with live GPS position when a geofence
+      // is configured for this specific form.
+      if (!form?.geofence) return;
+      if (event.type === "entry") setInsideGeofence(true);
+      if (event.type === "exit")  setInsideGeofence(false);
+    },
+  });
+  // ─────────────────────────────────────────────────────────────────────────
+
   // ── Step 1: Load form from IndexedDB ────────────────────────────────────────
   useEffect(() => {
     (async () => {
@@ -587,6 +608,16 @@ export default function CollectPage() {
             }}>
               <AddressSearch onSelect={handleSearchSelect} />
             </div>
+
+            {/* ── GPS GEOFENCE ADD ────────────────────────────────────────────
+                GeofenceStatusBar shows live GPS watch status, active zones,
+                and last entry/exit/dwell event. Only renders when geofences
+                are loaded (zoneCount > 0 guard is inside the component).
+            ─────────────────────────────────────────────────────────────── */}
+            {hasGeofence && (
+              <GeofenceStatusBar state={geofenceState} />
+            )}
+            {/* ─────────────────────────────────────────────────────────────── */}
 
             {/* Geofence HARD BLOCK banner */}
             {isBlocked && (
