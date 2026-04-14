@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "migrate": "node src/db/migrate.js"
+    "migrate": "node src/db/migrate.js",
+    "sync-worker": "node src/workers/syncWorker.js"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",
@@ -19,8 +20,11 @@
     "dotenv": "^16.4.5",
     "fastify": "^4.26.2",
     "fastify-plugin": "^4.5.1",
+    "minio": "^7.1.3",
     "pg": "^8.11.3",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "ws": "^8.17.0",
+    "y-websocket": "^1.5.4"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
