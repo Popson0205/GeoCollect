@@ -6,20 +6,50 @@ const { randomUUID } = require('crypto');
 
 /**
  * Normalise a form row so consumers always get `geofences` as an array.
- * Legacy rows that only have the old `geofence` column are promoted on read.
+ * Zone shape: { id, name, polygon, assigned_to: uuid | null }
  */
 function normaliseForm(row) {
-  // If the new geofences array is empty but the legacy single geofence exists,
-  // promote it so old data is never invisible.
   if (
     row.geofences &&
     Array.isArray(row.geofences) &&
     row.geofences.length === 0 &&
     row.geofence
   ) {
-    row.geofences = [{ id: 'legacy', name: 'Zone 1', polygon: row.geofence }];
+    row.geofences = [{
+      id: 'legacy',
+      name: 'Zone 1',
+      polygon: row.geofence,
+      assigned_to: null,
+    }];
+  }
+  // Ensure every zone has assigned_to field (backfill nulls for older records)
+  if (Array.isArray(row.geofences)) {
+    row.geofences = row.geofences.map(z => ({
+      assigned_to: null,
+      ...z,
+    }));
   }
   return row;
+}
+
+/**
+ * Filter zones for a field collector:
+ *   - zones assigned to them → included
+ *   - zones with assigned_to = null → included (open/shared zones)
+ *   - zones assigned to someone else → excluded
+ *
+ * Managers, GIS analysts, and admins always see all zones.
+ */
+function filterZonesForUser(form, userId, userRole) {
+  const managerRoles = ['project_manager', 'gis_analyst', 'platform_admin'];
+  if (managerRoles.includes(userRole)) return form; // full visibility
+
+  if (!Array.isArray(form.geofences)) return form;
+
+  form.geofences = form.geofences.filter(
+    z => z.assigned_to === null || z.assigned_to === userId
+  );
+  return form;
 }
 
 // ── Routes ────────────────────────────────────────────────────────────────────
@@ -39,7 +69,9 @@ module.exports = async function (fastify) {
        ORDER BY created_at DESC`,
       [req.params.projectId]
     );
-    return rows.map(normaliseForm);
+    return rows
+      .map(normaliseForm)
+      .map(f => filterZonesForUser(f, req.user.id, req.user.role));
   });
 
   // ── POST /projects/:projectId/forms ─────────────────────────────────────────
@@ -48,8 +80,8 @@ module.exports = async function (fastify) {
       name,
       geometry_type = 'Point',
       schema = {},
-      geofence = null,       // legacy single zone (still accepted)
-      geofences = [],        // new: array of { id, name, polygon }
+      geofence = null,
+      geofences = [],
       visibility = 'private',
     } = req.body;
 
@@ -60,9 +92,7 @@ module.exports = async function (fastify) {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
       [
-        req.params.projectId,
-        name,
-        geometry_type,
+        req.params.projectId, name, geometry_type,
         JSON.stringify(schema),
         geofence ? JSON.stringify(geofence) : null,
         JSON.stringify(geofences),
@@ -84,11 +114,12 @@ module.exports = async function (fastify) {
       [req.params.id]
     );
     if (!rows[0]) return reply.code(404).send({ error: 'Not found' });
-    return normaliseForm(rows[0]);
+    const form = normaliseForm(rows[0]);
+    return filterZonesForUser(form, req.user.id, req.user.role);
   });
 
   // ── PATCH /forms/:id ────────────────────────────────────────────────────────
-  // Accepts: name, geometry_type, schema, geofence, geofences, visibility
+  // geofences array: [{ id, name, polygon, assigned_to: uuid|null }]
   fastify.patch('/forms/:id', auth, async (req, reply) => {
     const { name, geometry_type, schema, geofence, geofences, visibility } = req.body;
 
@@ -107,12 +138,10 @@ module.exports = async function (fastify) {
     if (visibility !== undefined) {
       params.push(visibility); sets.push(`visibility = $${params.length}`);
     }
-    // Legacy single geofence
     if ('geofence' in req.body) {
       params.push(geofence ? JSON.stringify(geofence) : null);
       sets.push(`geofence = $${params.length}`);
     }
-    // New multi-zone array
     if ('geofences' in req.body) {
       params.push(JSON.stringify(geofences ?? []));
       sets.push(`geofences = $${params.length}::jsonb`);
@@ -137,32 +166,11 @@ module.exports = async function (fastify) {
   });
 
   // ── POST /forms/:id/publish ─────────────────────────────────────────────────
-  // Generates a share_token on first publish (idempotent on re-publish).
-  // Accepts optional `visibility` in body to set/change on publish.
   fastify.post('/forms/:id/publish', auth, async (req, reply) => {
     const visibility = req.body?.visibility;
-
-    const sets = [
-      'is_published = TRUE',
-      'version = version + 1',
-      'updated_at = NOW()',
-      // Generate token only if not already set
-      `share_token = COALESCE(share_token, $1)`,
-    ];
-    const params = [randomUUID(), req.params.id];
-
-    if (visibility) {
-      params.splice(1, 0, visibility); // insert before id
-      sets.push(`visibility = $2`);
-      // shift id param index
-      params.push(params.splice(1, 1)[0]); // move id back to last
-    }
-
-    // Cleaner approach — build explicitly:
     const token = randomUUID();
-    let query;
-    let qParams;
 
+    let query, qParams;
     if (visibility) {
       query = `
         UPDATE form_schemas
@@ -171,8 +179,7 @@ module.exports = async function (fastify) {
             updated_at   = NOW(),
             share_token  = COALESCE(share_token, $1),
             visibility   = $2
-        WHERE id = $3
-        RETURNING *`;
+        WHERE id = $3 RETURNING *`;
       qParams = [token, visibility, req.params.id];
     } else {
       query = `
@@ -181,8 +188,7 @@ module.exports = async function (fastify) {
             version      = version + 1,
             updated_at   = NOW(),
             share_token  = COALESCE(share_token, $1)
-        WHERE id = $2
-        RETURNING *`;
+        WHERE id = $2 RETURNING *`;
       qParams = [token, req.params.id];
     }
 
@@ -192,26 +198,26 @@ module.exports = async function (fastify) {
   });
 
   // ── GET /forms/share/:token  (PUBLIC — no auth) ─────────────────────────────
-  // Used by the Field app's public collect page.
-  // Returns form schema + geofences. Does NOT expose internal IDs beyond
-  // what the field collector needs.
+  // Public share link. Returns only open zones (assigned_to = null).
+  // Assigned zones are never exposed via the public link.
   fastify.get('/forms/share/:token', async (req, reply) => {
     const { rows } = await pool.query(
       `SELECT id, project_id, name, geometry_type, schema,
               geofence, geofences, visibility
        FROM form_schemas
-       WHERE share_token = $1
-         AND is_published = TRUE`,
+       WHERE share_token = $1 AND is_published = TRUE`,
       [req.params.token]
     );
     if (!rows[0]) return reply.code(404).send({ error: 'Form not found or not published' });
 
     const form = normaliseForm(rows[0]);
 
-    // Private forms cannot be accessed via share link at all
     if (form.visibility === 'private') {
       return reply.code(403).send({ error: 'This form is private and cannot be accessed via share link.' });
     }
+
+    // Public users only see open (unassigned) zones
+    form.geofences = (form.geofences || []).filter(z => z.assigned_to === null);
 
     return form;
   });
