@@ -80,6 +80,8 @@ services:
         value: "https://geocollect-api.onrender.com"
       - key: NEXT_PUBLIC_GEO_API_URL
         value: "https://geocollect-geo-api.onrender.com"
+      - key: NEXT_PUBLIC_FIELD_URL
+        value: "https://geocollect-field.onrender.com"
 
   - type: web
     name: geocollect-field
