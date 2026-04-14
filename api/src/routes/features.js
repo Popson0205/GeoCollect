@@ -4,64 +4,82 @@ const pool = require('../db/pool');
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * Check whether a GeoJSON geometry falls within ANY of the form's geofence
- * zones. If no zones are configured the submission is always allowed.
+ * Check geofence + worker assignment for a submission.
  *
- * Priority: new `geofences` array → legacy `geofence` column.
- * Uses PostGIS ST_Within for spatial accuracy.
+ * Rules:
+ *  1. No zones configured → allow (no restriction)
+ *  2. Has zones:
+ *     a. Find zones the user is allowed to submit in:
+ *        - assigned_to === null  (open zone, anyone can use)
+ *        - assigned_to === userId (this worker's zone)
+ *     b. Check if geometry is inside ANY of those allowed zones (PostGIS)
+ *     c. If inside → allow
+ *     d. If not inside any allowed zone → reject with reason
  *
- * Returns { allowed: true } or { allowed: false, error: string }.
+ * Returns { allowed: true } or { allowed: false, error: string }
  */
-async function checkGeofence(client, formSchemaId, geometry) {
+async function checkGeofenceAndAssignment(client, formSchemaId, geometry, userId) {
   const { rows } = await client.query(
-    'SELECT geofence, geofences, visibility FROM form_schemas WHERE id = $1',
+    'SELECT geofence, geofences FROM form_schemas WHERE id = $1',
     [formSchemaId]
   );
-  if (!rows[0]) return { allowed: true }; // form not found — let DB FK handle it
+  if (!rows[0]) return { allowed: true };
 
-  const { geofence, geofences, visibility } = rows[0];
+  const { geofence, geofences } = rows[0];
 
-  // Build the list of zones to test
-  const zones = [];
-
+  // Build full zone list
+  let allZones = [];
   if (Array.isArray(geofences) && geofences.length > 0) {
-    zones.push(...geofences.map((z) => z.polygon));
+    allZones = geofences;
   } else if (geofence) {
-    zones.push(geofence);
+    allZones = [{ id: 'legacy', name: 'Zone 1', polygon: geofence, assigned_to: null }];
   }
 
-  // No zones configured → allow
-  if (zones.length === 0) return { allowed: true, visibility };
+  // No zones → no restriction
+  if (allZones.length === 0) return { allowed: true };
 
-  // Test each zone — pass if inside ANY one
-  for (const polygon of zones) {
+  // Filter to zones this user is allowed to submit in
+  const allowedZones = allZones.filter(
+    z => z.assigned_to === null || z.assigned_to === userId
+  );
+
+  if (allowedZones.length === 0) {
+    return {
+      allowed: false,
+      error: 'You are not assigned to any zone on this form.',
+    };
+  }
+
+  // Check if geometry is inside ANY allowed zone
+  for (const zone of allowedZones) {
     const result = await client.query(
       `SELECT ST_Within(
          ST_SetSRID(ST_GeomFromGeoJSON($1), 4326),
          ST_SetSRID(ST_GeomFromGeoJSON($2), 4326)
        ) AS within`,
-      [JSON.stringify(geometry), JSON.stringify(polygon)]
+      [JSON.stringify(geometry), JSON.stringify(zone.polygon)]
     );
-    if (result.rows[0]?.within) return { allowed: true, visibility };
+    if (result.rows[0]?.within) return { allowed: true };
   }
 
+  // Inside the form's area but not inside their assigned zone
+  const assignedZone = allZones.find(z => z.assigned_to === userId);
   return {
     allowed: false,
-    visibility,
-    error: 'Submission rejected: location is outside all geofence zones for this form.',
+    error: assignedZone
+      ? `Location is outside your assigned zone: "${assignedZone.name}". Please move to your designated area.`
+      : 'Location is outside all permitted geofence zones.',
   };
 }
 
 /**
- * Check whether a user (by id) is a member of the project that owns a form.
- * Used for `organization` visibility enforcement.
+ * Check whether a user is a member of the project that owns a form.
  */
 async function isOrgMember(client, formSchemaId, userId) {
   const { rows } = await client.query(
     `SELECT 1 FROM project_members pm
      JOIN form_schemas fs ON fs.project_id = pm.project_id
-     WHERE fs.id = $1 AND pm.user_id = $2
-     LIMIT 1`,
+     WHERE fs.id = $1 AND pm.user_id = $2 LIMIT 1`,
     [formSchemaId, userId]
   );
   return rows.length > 0;
@@ -75,20 +93,19 @@ module.exports = async function (fastify) {
   // ── POST /features  (authenticated) ─────────────────────────────────────────
   fastify.post('/features', auth, async (req, reply) => {
     const { form_schema_id, project_id, geometry, attributes, device_id } = req.body;
-
     const client = await pool.connect();
     try {
-      const fence = await checkGeofence(client, form_schema_id, geometry);
+      // Geofence + assignment check
+      const fence = await checkGeofenceAndAssignment(client, form_schema_id, geometry, req.user.id);
       if (!fence.allowed) return reply.code(422).send({ error: fence.error });
 
-      // Organization visibility: user must be a project member
-      if (fence.visibility === 'organization') {
+      // Org visibility check
+      const { rows: visRows } = await client.query(
+        'SELECT visibility FROM form_schemas WHERE id = $1', [form_schema_id]
+      );
+      if (visRows[0]?.visibility === 'organization') {
         const member = await isOrgMember(client, form_schema_id, req.user.id);
-        if (!member) {
-          return reply.code(403).send({
-            error: 'This form is restricted to organization members.',
-          });
-        }
+        if (!member) return reply.code(403).send({ error: 'This form is restricted to organization members.' });
       }
 
       const { rows } = await client.query(
@@ -96,10 +113,7 @@ module.exports = async function (fastify) {
            (form_schema_id, project_id, submitted_by, geometry, attributes, device_id)
          VALUES ($1, $2, $3, ST_SetSRID(ST_GeomFromGeoJSON($4), 4326), $5, $6)
          RETURNING id, form_schema_id, project_id, attributes, device_id, submitted_at`,
-        [
-          form_schema_id, project_id, req.user.id,
-          JSON.stringify(geometry), JSON.stringify(attributes), device_id,
-        ]
+        [form_schema_id, project_id, req.user.id, JSON.stringify(geometry), JSON.stringify(attributes), device_id]
       );
       return reply.code(201).send(rows[0]);
     } finally {
@@ -107,36 +121,31 @@ module.exports = async function (fastify) {
     }
   });
 
-  // ── POST /features/public  (NO auth — public share link submissions) ─────────
-  // Only allowed when form visibility = 'public'.
-  // submitted_by is recorded as NULL.
+  // ── POST /features/public  (NO auth — public share link) ────────────────────
+  // Public submissions only pass through open zones (assigned_to = null).
   fastify.post('/features/public', async (req, reply) => {
     const { share_token, form_schema_id, project_id, geometry, attributes, device_id } = req.body;
 
-    // Resolve form via share_token (more tamper-resistant than trusting form_schema_id alone)
     const { rows: formRows } = await pool.query(
-      `SELECT id, project_id, visibility
-       FROM form_schemas
+      `SELECT id, project_id, visibility FROM form_schemas
        WHERE share_token = $1 AND is_published = TRUE`,
       [share_token]
     );
-    if (!formRows[0]) {
-      return reply.code(404).send({ error: 'Form not found or not published.' });
-    }
+    if (!formRows[0]) return reply.code(404).send({ error: 'Form not found or not published.' });
 
     const form = formRows[0];
-
     if (form.visibility !== 'public') {
       return reply.code(403).send({
         error: form.visibility === 'private'
-          ? 'This form is private. Submissions are not accepted via share link.'
-          : 'This form is restricted to organization members. Please log in.',
+          ? 'This form is private.'
+          : 'This form requires organization login.',
       });
     }
 
     const client = await pool.connect();
     try {
-      const fence = await checkGeofence(client, form.id, geometry);
+      // Public submissions: treat as anonymous user — only open zones apply
+      const fence = await checkGeofenceAndAssignment(client, form.id, geometry, null);
       if (!fence.allowed) return reply.code(422).send({ error: fence.error });
 
       const { rows } = await client.query(
@@ -144,10 +153,7 @@ module.exports = async function (fastify) {
            (form_schema_id, project_id, submitted_by, geometry, attributes, device_id)
          VALUES ($1, $2, NULL, ST_SetSRID(ST_GeomFromGeoJSON($3), 4326), $4, $5)
          RETURNING id, form_schema_id, project_id, attributes, device_id, submitted_at`,
-        [
-          form.id, form.project_id,
-          JSON.stringify(geometry), JSON.stringify(attributes), device_id,
-        ]
+        [form.id, form.project_id, JSON.stringify(geometry), JSON.stringify(attributes), device_id]
       );
       return reply.code(201).send(rows[0]);
     } finally {
@@ -168,13 +174,15 @@ module.exports = async function (fastify) {
       for (const f of features) {
         const { form_schema_id, project_id, geometry, attributes, device_id } = f;
 
-        const fence = await checkGeofence(client, form_schema_id, geometry);
+        const fence = await checkGeofenceAndAssignment(client, form_schema_id, geometry, req.user.id);
         if (!fence.allowed) {
           skipped.push({ id: f.id, reason: fence.error }); continue;
         }
 
-        // Organization check for batch sync
-        if (fence.visibility === 'organization') {
+        const { rows: visRows } = await client.query(
+          'SELECT visibility FROM form_schemas WHERE id = $1', [form_schema_id]
+        );
+        if (visRows[0]?.visibility === 'organization') {
           const member = await isOrgMember(client, form_schema_id, req.user.id);
           if (!member) {
             skipped.push({ id: f.id, reason: 'Not an organization member.' }); continue;
@@ -186,10 +194,7 @@ module.exports = async function (fastify) {
              (form_schema_id, project_id, submitted_by, geometry, attributes, device_id)
            VALUES ($1, $2, $3, ST_SetSRID(ST_GeomFromGeoJSON($4), 4326), $5, $6)
            RETURNING id, submitted_at`,
-          [
-            form_schema_id, project_id, req.user.id,
-            JSON.stringify(geometry), JSON.stringify(attributes), device_id,
-          ]
+          [form_schema_id, project_id, req.user.id, JSON.stringify(geometry), JSON.stringify(attributes), device_id]
         );
         results.push(rows[0]);
       }
@@ -227,10 +232,8 @@ module.exports = async function (fastify) {
     const { rows } = await pool.query(query, params);
     return {
       type: 'FeatureCollection',
-      features: rows.map((r) => ({
-        type: 'Feature',
-        id: r.id,
-        geometry: r.geometry,
+      features: rows.map(r => ({
+        type: 'Feature', id: r.id, geometry: r.geometry,
         properties: {
           ...r.attributes,
           _submitted_at: r.submitted_at,
@@ -246,20 +249,14 @@ module.exports = async function (fastify) {
     const { rows } = await pool.query(
       `SELECT f.*, ST_AsGeoJSON(f.geometry)::jsonb AS geometry,
               u.full_name AS submitted_by_name
-       FROM features f
-       LEFT JOIN users u ON u.id = f.submitted_by
+       FROM features f LEFT JOIN users u ON u.id = f.submitted_by
        WHERE f.id = $1`,
       [req.params.id]
     );
     if (!rows[0]) return reply.code(404).send({ error: 'Not found' });
     return {
-      type: 'Feature',
-      id: rows[0].id,
-      geometry: rows[0].geometry,
-      properties: {
-        ...rows[0].attributes,
-        _submitted_at: rows[0].submitted_at,
-      },
+      type: 'Feature', id: rows[0].id, geometry: rows[0].geometry,
+      properties: { ...rows[0].attributes, _submitted_at: rows[0].submitted_at },
     };
   });
 
