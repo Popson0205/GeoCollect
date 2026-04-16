@@ -8,6 +8,7 @@ const app = Fastify({ logger: true });
 app.register(require('@fastify/cors'), {
   origin: [
     'https://geocollect-portal.onrender.com',
+    'https://geocollect-studio.onrender.com',
     'http://localhost:3000',
     'http://localhost:3004',
   ],
@@ -46,8 +47,6 @@ app.register(require('./routes/attachments'));
 app.register(require('./routes/portal'));
 
 // ── WebSocket (Yjs CRDT sync) ─────────────────────────────────────────────────
-// Only start WebSocket server if REDIS_URL is configured
-// (workers require Redis — skip gracefully if not available on this deployment)
 if (process.env.REDIS_URL) {
   require('./ws-server')(app);
 } else {
