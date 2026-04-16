@@ -1,17 +1,28 @@
 // portal/src/lib/api.ts
 // Typed fetch wrappers for GeoCollect API.
 
-const API_URL     = process.env.NEXT_PUBLIC_API_URL     || 'http://localhost:3001';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 const GEO_API_URL = process.env.NEXT_PUBLIC_GEO_API_URL || 'http://localhost:3002';
 
+function getToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  // Check both cookie and localStorage for compatibility
+  const fromStorage = localStorage.getItem('gc_token');
+  if (fromStorage) return fromStorage;
+  // Fallback: parse gc_token cookie
+  const match = document.cookie.match(/(?:^|;\s*)gc_token=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const token = getToken();
   const res = await fetch(`${API_URL}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers,
     },
-    credentials: 'include',
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -24,7 +35,7 @@ export const api = {
   getProjects: () => apiFetch<any[]>('/portal/projects'),
   getProjectFeatures: (id: string, params?: { bbox?: string; limit?: number }) => {
     const qs = new URLSearchParams(params as any).toString();
-    return apiFetch<GeoJSON.FeatureCollection>(`/portal/projects/${id}/features${qs ? `?${qs}` : ''}`);
+    return apiFetch<any>(`/portal/projects/${id}/features${qs ? `?${qs}` : ''}`);
   },
   getPortalConfig: (projectId: string) => apiFetch<any>(`/portal/config/${projectId}`),
   savePortalConfig: (projectId: string, body: any) =>
@@ -56,6 +67,5 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project_id: projectId, format }),
-      credentials: 'include',
     }),
 };
