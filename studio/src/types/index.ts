@@ -23,6 +23,7 @@ export interface Project {
   owner_id: string;
   owner_name?: string;
   status: "active" | "archived";
+  visibility?: "public" | "organization" | "private";
   member_count?: number;
   form_count?: number;
   created_at: string;
@@ -52,7 +53,6 @@ export interface FieldDef {
   required?: boolean;
   hint?: string;
   placeholder?: string;
-  /** Options for select / multiselect fields */
   options?: SelectOption[];
   min?: number;
   max?: number;
@@ -74,7 +74,6 @@ export interface FormSchema {
   version: number;
   geometry_type: GeometryType;
   schema: { fields: FieldDef[] };
-  /** GeoJSON Polygon boundary for geofenced data collection */
   geofence?: GeofencePolygon | null;
   is_published: boolean;
   created_at: string;
