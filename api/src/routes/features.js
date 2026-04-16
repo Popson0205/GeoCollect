@@ -1,23 +1,13 @@
-// api/src/routes/features.js
+
+
 const pool = require('../db/pool');
+const { Queue } = require('bullmq');
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+const webhookQueue = new Queue('webhook-delivery', {
+  connection: { url: process.env.REDIS_URL || 'redis://localhost:6379' },
+});
 
-/**
- * Check geofence + worker assignment for a submission.
- *
- * Rules:
- *  1. No zones configured → allow (no restriction)
- *  2. Has zones:
- *     a. Find zones the user is allowed to submit in:
- *        - assigned_to === null  (open zone, anyone can use)
- *        - assigned_to === userId (this worker's zone)
- *     b. Check if geometry is inside ANY of those allowed zones (PostGIS)
- *     c. If inside → allow
- *     d. If not inside any allowed zone → reject with reason
- *
- * Returns { allowed: true } or { allowed: false, error: string }
- */
+
 async function checkGeofenceAndAssignment(client, formSchemaId, geometry, userId) {
   const { rows } = await client.query(
     'SELECT geofence, geofences FROM form_schemas WHERE id = $1',
@@ -85,6 +75,22 @@ async function isOrgMember(client, formSchemaId, userId) {
   return rows.length > 0;
 }
 
+/**
+ * Phase 3: enqueue a webhook delivery job (fire-and-forget).
+ * Errors are swallowed so a webhook failure never blocks a feature insert.
+ */
+async function enqueueWebhook(event, projectId, featureId, formSchemaId, attributes) {
+  try {
+    await webhookQueue.add(event, {
+      projectId,
+      event,
+      payload: { id: featureId, form_schema_id: formSchemaId, attributes },
+    });
+  } catch (err) {
+    console.error('[features] Failed to enqueue webhook:', err.message);
+  }
+}
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 module.exports = async function (fastify) {
@@ -115,6 +121,10 @@ module.exports = async function (fastify) {
          RETURNING id, form_schema_id, project_id, attributes, device_id, submitted_at`,
         [form_schema_id, project_id, req.user.id, JSON.stringify(geometry), JSON.stringify(attributes), device_id]
       );
+
+      // Phase 3: fire webhook
+      await enqueueWebhook('feature.created', project_id, rows[0].id, form_schema_id, attributes);
+
       return reply.code(201).send(rows[0]);
     } finally {
       client.release();
@@ -155,6 +165,10 @@ module.exports = async function (fastify) {
          RETURNING id, form_schema_id, project_id, attributes, device_id, submitted_at`,
         [form.id, form.project_id, JSON.stringify(geometry), JSON.stringify(attributes), device_id]
       );
+
+      // Phase 3: fire webhook (anonymous submission — no user id)
+      await enqueueWebhook('feature.created', form.project_id, rows[0].id, form.id, attributes);
+
       return reply.code(201).send(rows[0]);
     } finally {
       client.release();
@@ -205,6 +219,12 @@ module.exports = async function (fastify) {
       throw err;
     } finally {
       client.release();
+    }
+
+    // Phase 3: enqueue batch webhook for each synced feature
+    for (const r of results) {
+      const f = features.find(x => x.id === r.id) || features[results.indexOf(r)];
+      await enqueueWebhook('batch.synced', f?.project_id, r.id, f?.form_schema_id, f?.attributes);
     }
 
     return reply.code(201).send({ synced: results.length, results, skipped });
