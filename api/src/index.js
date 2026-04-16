@@ -24,7 +24,13 @@ app.register(require('@fastify/rate-limit'), {
   timeWindow: '1 minute',
 });
 
-// ── Health ────────────────────────────────────────────────────────────────────
+// ── Health / Root ─────────────────────────────────────────────────────────────
+app.get('/', async () => ({
+  status: 'ok',
+  service: 'geocollect-api',
+  ts: new Date().toISOString(),
+}));
+
 app.get('/health', async () => ({
   status: 'ok',
   service: 'geocollect-api',
@@ -40,7 +46,13 @@ app.register(require('./routes/attachments'));
 app.register(require('./routes/portal'));
 
 // ── WebSocket (Yjs CRDT sync) ─────────────────────────────────────────────────
-require('./ws-server')(app);
+// Only start WebSocket server if REDIS_URL is configured
+// (workers require Redis — skip gracefully if not available on this deployment)
+if (process.env.REDIS_URL) {
+  require('./ws-server')(app);
+} else {
+  app.log.warn('REDIS_URL not set — WebSocket sync and BullMQ workers disabled.');
+}
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;
